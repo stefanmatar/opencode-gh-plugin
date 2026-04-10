@@ -1,3 +1,8 @@
+/**
+ * OpenCode TUI Plugin — Sidebar Context
+ * Displays CI checks, PR info, session cost, and working directory in the sidebar footer.
+ */
+
 /** @jsxImportSource @opentui/solid */
 import type {
   TuiPlugin,
