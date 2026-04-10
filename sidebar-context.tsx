@@ -159,7 +159,7 @@ const stopCi = () => {
 
 const scheduleCi = (api: TuiPluginApi, dir: string) => {
   stopCi()
-  const ci: CiData = api.kv.get("ci", null)
+  const ci = api.kv.get<CiData>("ci", null)
   const st = ciOverall(ci?.checks)
   if (st === "pending") startSpinner(api)
   else stopSpinner()
@@ -202,7 +202,7 @@ const fetchPr = async (api: TuiPluginApi, dir: string) => {
 const CheckRow = (props: { name: string; dur: string; icon: string; color: any; fg: any; muted: any; link: string }) => (
   <box flexDirection="row" width="100%" justifyContent="space-between" height={1}>
     <text fg={props.fg} overflow="hidden" flexShrink={1}>{props.name}</text>
-    <text fg={props.muted} flexShrink={0}> {props.dur ? `${props.dur} ` : ""}<span style={{ fg: props.color }}>{props.icon}</span> <span onMouseUp={() => openUrl(props.link)}>↗</span></text>
+    <text fg={props.muted} flexShrink={0}> {props.dur ? `${props.dur} ` : ""}<span style={{ fg: props.color }}>{props.icon}</span> <span {...{ onMouseUp: () => openUrl(props.link) } as any}>↗</span></text>
   </box>
 )
 
@@ -229,10 +229,10 @@ const footer = (api: TuiPluginApi): TuiSlotPlugin => ({
       const name = slash >= 0 ? full.slice(slash + 1) : full
 
       // reactive KV
-      const pr: PrData = api.kv.get("pr", null)
-      const ci: CiData = api.kv.get("ci", null)
-      const spinIdx: number = api.kv.get("spin", 0)
-      const expanded: boolean = api.kv.get("ci_expanded", false)
+      const pr = api.kv.get<PrData>("pr", null)
+      const ci = api.kv.get<CiData>("ci", null)
+      const spinIdx = api.kv.get<number>("spin", 0)
+      const expanded = api.kv.get<boolean>("ci_expanded", false)
 
       const st = ciOverall(ci?.checks)
       const badge = st === "fail" ? "✗" : st === "pending" ? SPINNER[spinIdx] : st === "pass" ? "✓" : null
@@ -318,9 +318,9 @@ const footer = (api: TuiPluginApi): TuiSlotPlugin => ({
             {pr ? (
               <span>
                 {" · "}
-                <span style={{ fg: theme.primary }} onMouseUp={() => openUrl(pr.url)}>#{pr.num}</span>
+                <span {...{ style: { fg: theme.primary }, onMouseUp: () => openUrl(pr.url) } as any}>#{pr.num}</span>
                 {" "}
-                <span style={{ fg: theme.textMuted }} onMouseUp={() => openUrl(pr.url)}>↗</span>
+                <span {...{ style: { fg: theme.textMuted }, onMouseUp: () => openUrl(pr.url) } as any}>↗</span>
               </span>
             ) : null}
           </text>
@@ -345,6 +345,9 @@ const footer = (api: TuiPluginApi): TuiSlotPlugin => ({
 
 const tui: TuiPlugin = async (api) => {
   api.slots.register(footer(api))
+  // clear stale data from previous project/session
+  api.kv.set("pr", null)
+  api.kv.set("ci", null)
 
   const dir = api.state.path?.directory
   if (dir) {

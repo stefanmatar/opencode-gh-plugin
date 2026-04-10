@@ -1,0 +1,10 @@
+{
+  "name": "opencode-gh-plugin",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@opencode-ai/plugin": "latest",
+    "@opentui/solid": "latest",
+    "typescript": "^5.8.0"
+  }
+}
