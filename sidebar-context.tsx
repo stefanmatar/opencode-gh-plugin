@@ -15,7 +15,7 @@ import { exec as execCb, execFile } from "node:child_process"
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 const BOGUS = 1_000_000_000_000
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-const MAX_ROWS = 7
+const MAX_ROWS = 3
 
 // ── Types ──
 
