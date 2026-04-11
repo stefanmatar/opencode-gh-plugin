@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup } from "solid-js"
 import type {
   TuiPlugin,
   TuiPluginApi,
@@ -11,11 +11,11 @@ const BOGUS = 1_000_000_000_000
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 const SKIP_ICON = "○"
 const MAX_ROWS = 7
-
 // ── Types ──
 
 type PrData = { url: string; num: string } | null
-type CiCheck = { name: string; state: string; workflow: string; link: string; startedAt: string; completedAt: string }
+type CiOverallState = "fail" | "pending" | "pass" | null
+type CiCheck = { name: string; state: string; bucket?: string; workflow: string; link: string; startedAt: string; completedAt: string }
 type CiData = { checks: CiCheck[]; ts: number } | null
 type RepoData = { dir: string; branch?: string }
 
@@ -27,6 +27,8 @@ const isPending = (s: string) => PENDING.has(s)
 const isFail = (s: string) => FAIL.has(s)
 const isSkip = (s: string) => SKIP.has(s)
 const isPass = (s: string) => s === "SUCCESS"
+const isReactionFail = (item: CiCheck) => item.bucket ? item.bucket === "fail" : item.state !== "CANCELLED" && isFail(item.state)
+const isReactionPending = (item: CiCheck) => item.bucket ? item.bucket === "pending" : isPending(item.state)
 
 // ── Helpers ──
 
@@ -76,11 +78,18 @@ const spanDuration = (items: CiCheck[]): string => {
   return fmtSec(Math.round((hi - lo) / 1000))
 }
 
-const ciOverall = (checks: CiCheck[] | undefined) => {
+const ciOverall = (checks: CiCheck[] | undefined): CiOverallState => {
   if (!checks || checks.length === 0) return null
   if (checks.some((c) => isFail(c.state))) return "fail" as const
   if (checks.some((c) => isPending(c.state))) return "pending" as const
   return "pass" as const
+}
+
+const ciReactionOverall = (checks: CiCheck[] | undefined): CiOverallState => {
+  if (!checks || checks.length === 0) return null
+  if (checks.some(isReactionFail)) return "fail"
+  if (checks.some(isReactionPending)) return "pending"
+  return "pass"
 }
 
 const parse = <T,>(res: T | { data?: T }) => {
@@ -97,7 +106,8 @@ const branch = async (dir: string) => {
 const sessionDir = async (api: TuiPluginApi, sid: string) => {
   const res = await api.client.session.get({ sessionID: sid }).catch(() => null)
   const data = res ? parse(res as { data?: { directory?: string } }) : null
-  return typeof data?.directory === "string" ? data.directory : null
+  if (!data || typeof data !== "object") return null
+  return typeof (data as { directory?: string }).directory === "string" ? (data as { directory?: string }).directory : null
 }
 
 const parsePr = (out: string | null): PrData => {
@@ -123,46 +133,98 @@ const middle = (txt: string, max = 22) => {
   return txt.slice(0, left) + "..." + txt.slice(-right)
 }
 
-// ── Check row component ──
+const checkLabel = (item: CiCheck) => {
+  const wf = item.workflow || ""
+  return wf && wf !== item.name ? `${wf} / ${item.name}` : item.name
+}
 
-const CheckRow = (props: { name: string; dur: string; icon: string; color: any; fg: any; muted: any; link: string }) => (
-  <box flexDirection="row" width="100%" justifyContent="space-between" height={1}>
-    <text fg={props.fg} overflow="hidden" flexShrink={1} wrapMode="none">{middle(props.name)}</text>
-    <text fg={props.muted} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(props.link)}>
-      {props.dur ? `${props.dur} ` : ""}
-      <span style={{ fg: props.color }}>{props.icon}</span>
-      {" ↗"}
-    </text>
+const failurePrompt = (pr: PrData, branch: string | undefined, checks: CiCheck[]) => {
+  const lines = [
+    `GitHub CI just failed${pr ? ` for PR #${pr.num}` : ""}${branch ? ` on branch ${branch}` : ""}.`,
+  ]
+  const failing = checks.filter(isReactionFail).slice(0, 5)
+  if (failing.length > 0) {
+    lines.push("Failing checks:")
+    for (const item of failing) {
+      const parts = [`- ${checkLabel(item)}`, item.state]
+      if (item.link) parts.push(item.link)
+      lines.push(parts.join(" - "))
+    }
+  }
+  if (pr?.url) lines.push(`PR: ${pr.url}`)
+  lines.push("Investigate the failing checks and take the next appropriate action.")
+  return lines.join("\n")
+}
+
+const ms = (item: CiCheck & { queued: boolean }) => {
+  const s = new Date(item.startedAt).getTime()
+  if (s < BOGUS) return -1
+  if (isPending(item.state) && !item.queued) return Date.now() - s
+  const e = new Date(item.completedAt).getTime()
+  if (!isFinite(e) || e <= s) return -1
+  return e - s
+}
+
+const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"]; spin: number }) => {
+  const icon = isFail(props.item.state) ? "✗" : isPending(props.item.state) ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
+  const color = isFail(props.item.state) ? props.theme.error : isPending(props.item.state) ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
+  const dur = isPending(props.item.state) ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
+  return (
+    <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.backgroundPanel}>
+      <text fg={props.theme.text} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item))}</text>
+      <text fg={props.theme.textMuted} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(props.item.link)}>
+        {dur ? `${dur} ` : ""}
+        <span style={{ fg: color }}>{icon}</span>
+        {" ↗"}
+      </text>
+    </box>
+  )
+}
+
+const PlaceholderRow = (props: {
+  theme: TuiPluginApi["theme"]["current"]
+  left: string
+  right?: string
+  panel?: boolean
+}) => (
+  <box
+    flexDirection="row"
+    width="100%"
+    justifyContent="space-between"
+    height={1}
+    backgroundColor={props.panel ? props.theme.backgroundPanel : undefined}
+  >
+    <text fg={props.theme.textMuted} wrapMode="none">{props.left}</text>
+    {props.right ? <text fg={props.theme.textMuted} wrapMode="none">{props.right}</text> : null}
   </box>
 )
 
-const expandedKey = (sid: string) => `ci_expanded:${sid}`
+const autoReactKey = (sid: string) => `ci_auto_react:${sid}`
 
 const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const [repo, setRepo] = createSignal<RepoData | null>(null)
   const [pr, setPr] = createSignal<PrData>(null)
   const [ci, setCi] = createSignal<CiData>(null)
   const [spin, setSpin] = createSignal(0)
-  const [expanded, setExpanded] = createSignal(false)
+  const [autoReact, setAutoReact] = createSignal(false)
+  const [loading, setLoading] = createSignal(true)
 
   const theme = createMemo(() => props.api.theme.current)
-  const toggleExpanded = () => {
-    if (!state().hasChecks) return
-    const next = !expanded()
-    setExpanded(next)
-    props.api.kv.set(expandedKey(props.session_id), next)
+  const toggleAutoReact = () => {
+    const next = !autoReact()
+    setAutoReact(next)
+    props.api.kv.set(autoReactKey(props.session_id), next)
   }
   const location = createMemo(() => {
     const dir = repo()?.dir || ""
     const home = process.env.HOME ?? ""
     const display = home && dir.startsWith(home) ? "~" + dir.slice(home.length) : dir
-    const slash = display.lastIndexOf("/")
     return {
       branch: repo()?.branch || "",
-      parent: slash >= 0 ? display.slice(0, slash) : "",
-      name: slash >= 0 ? display.slice(slash + 1) : display,
+      path: display,
     }
   })
+  const showPlaceholders = createMemo(() => loading() && !repo() && !pr() && !ci())
   const state = createMemo(() => {
     const data = ci()?.checks ?? []
     let failN = 0, pendN = 0, passN = 0, skipN = 0
@@ -172,12 +234,6 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       else if (isPass(item.state)) passN++
       else if (isSkip(item.state)) skipN++
     }
-    const summary: string[] = []
-    if (failN) summary.push(`${failN} failed`)
-    if (pendN) summary.push(`${pendN} pending`)
-    if (passN) summary.push(`${passN} passed`)
-    if (skipN) summary.push(`${skipN} skipped`)
-
     const checks = data.map((item) => ({
       ...item,
       queued: isPending(item.state) && new Date(item.startedAt).getTime() < BOGUS,
@@ -191,13 +247,14 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
         : 4
       const diff = order(a) - order(b)
       if (diff !== 0) return diff
+      const time = ms(b) - ms(a)
+      if (time !== 0) return time
       return a.name.localeCompare(b.name)
     })
     const hasChecks = checks.length > 0
-    const filtered = expanded() ? checks : checks.filter((item) => isFail(item.state) || isPending(item.state))
-    const limit = filtered.length > MAX_ROWS ? MAX_ROWS - 1 : MAX_ROWS
-    const visible = filtered.slice(0, limit)
-    const rest = Math.max(0, filtered.length - limit)
+    const limit = checks.length > MAX_ROWS ? MAX_ROWS - 1 : MAX_ROWS
+    const visible = checks.slice(0, limit)
+    const rest = Math.max(0, checks.length - limit)
     const parts: { count: number; icon: string; color: any }[] = []
     if (failN) parts.push({ count: failN, icon: "✗", color: theme().error })
     if (pendN) parts.push({ count: pendN, icon: SPINNER[spin()], color: theme().warning })
@@ -211,15 +268,21 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       parts,
       rest,
       skipN,
-      summary,
       visible,
     }
+  })
+  const panelRows = createMemo(() => {
+    const rows: Array<{ kind: "check"; item: CiCheck } | { kind: "more" }> = state().visible.map((item) => ({ kind: "check", item }))
+    if (state().rest > 0) rows.push({ kind: "more" })
+    return rows
   })
 
   let spinTimer: ReturnType<typeof setInterval> | null = null
   let ciTimer: ReturnType<typeof setTimeout> | null = null
   let burst = 0
   let token = 0
+  let seenReactionState = false
+  let lastReactionState: CiOverallState = null
 
   const stopSpin = () => {
     if (!spinTimer) return
@@ -249,10 +312,45 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     ciTimer = setTimeout(() => void poll(sid, dir, token), 1_000)
   }
 
+  const reactToFailure = async (sid: string, dir: string, nextPr: PrData, nextBranch: string | undefined, next: CiData) => {
+    props.api.ui.toast({
+      variant: "error",
+      title: "GitHub CI failed",
+      message: autoReact() ? "Notifying the agent." : "CI checks entered a failing state.",
+    })
+    if (!autoReact()) return
+    const res = await props.api.client.session.promptAsync({
+      sessionID: sid,
+      directory: dir,
+      parts: [{ type: "text", text: failurePrompt(nextPr, nextBranch, next.checks) }],
+    }, { throwOnError: true }).catch(() => null)
+    if (!res) {
+      props.api.ui.toast({
+        variant: "error",
+        title: "GitHub CI failed",
+        message: "Failed to notify the agent.",
+      })
+    }
+  }
+
+  const applyCi = (sid: string, dir: string, next: CiData, nextPr: PrData = pr(), nextBranch: string | undefined = repo()?.branch) => {
+    if (next) {
+      const prev = seenReactionState ? lastReactionState : null
+      const current = ciReactionOverall(next.checks)
+      const shouldReact = seenReactionState && prev !== "fail" && current === "fail"
+      seenReactionState = true
+      lastReactionState = current
+      setCi(next)
+      if (shouldReact) void reactToFailure(sid, dir, nextPr, nextBranch, next)
+      return
+    }
+    setCi(next)
+  }
+
   const poll = async (sid: string, dir: string, run: number) => {
-    const next = parseCi(await gh(["pr", "checks", "--json", "name,state,workflow,link,startedAt,completedAt"], dir))
+    const next = parseCi(await gh(["pr", "checks", "--json", "name,state,bucket,workflow,link,startedAt,completedAt"], dir))
     if (run !== token) return
-    if (next || Date.now() < burst) setCi(next)
+    if (next || Date.now() < burst) applyCi(sid, dir, next)
     schedule(sid, dir)
   }
 
@@ -266,27 +364,32 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       setRepo(null)
       setPr(null)
       setCi(null)
+      setLoading(false)
       stopSpin()
       return
     }
     const [head, pull, checks] = await Promise.all([
       branch(dir),
       gh(["pr", "view", "--json", "url,number", "-q", ".url + \" \" + (.number|tostring)"], dir),
-      gh(["pr", "checks", "--json", "name,state,workflow,link,startedAt,completedAt"], dir),
+      gh(["pr", "checks", "--json", "name,state,bucket,workflow,link,startedAt,completedAt"], dir),
     ])
     if (run !== token) return
+    const nextPr = parsePr(pull)
     setRepo({ dir, branch: head })
-    setPr(parsePr(pull))
-    setCi(parseCi(checks))
+    setPr(nextPr)
+    applyCi(sid, dir, parseCi(checks), nextPr, head)
+    setLoading(false)
     schedule(sid, dir)
   }
 
-  createEffect(() => {
-    const sid = props.session_id
+  createEffect(on(() => props.session_id, (sid) => {
+    setLoading(true)
     setRepo(null)
     setPr(null)
     setCi(null)
-    setExpanded(props.api.kv.get(expandedKey(sid), false))
+    seenReactionState = false
+    lastReactionState = null
+    setAutoReact(props.api.kv.get(autoReactKey(sid), false))
     void load(sid, true)
 
     const offIdle = props.api.event.on("session.idle", (evt) => {
@@ -306,66 +409,56 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       stopCi()
       stopSpin()
     })
-  })
+  }, { defer: false }))
 
   return (
     <box gap={1}>
-      <box flexDirection="column" height={MAX_ROWS + 1} justifyContent="flex-end">
-        <Show when={expanded()}>
-          <For each={state().visible}>
-            {(item) => {
-              const wf = item.workflow || ""
-              const icon = isFail(item.state) ? "✗" : isPending(item.state) ? SPINNER[spin()] : isSkip(item.state) ? SKIP_ICON : "✓"
-              const color = isFail(item.state) ? theme().error : isPending(item.state) ? theme().warning : isSkip(item.state) ? theme().textMuted : theme().success
-              const dur = isPending(item.state) ? elapsed(item.startedAt) : isSkip(item.state) ? "" : spanDuration([item])
-              const label = wf && wf !== item.name ? `${wf} / ${item.name}` : item.name
-              return <CheckRow name={label} dur={dur} icon={icon} color={color} fg={theme().text} muted={theme().textMuted} link={item.link} />
-            }}
-          </For>
-          <Show when={state().rest > 0}>
-            <box flexDirection="row" width="100%" justifyContent="space-between" height={1}>
-              <text fg={theme().textMuted} wrapMode="none">+{state().rest} more</text>
-              <text
-                fg={theme().textMuted}
-                wrapMode="none"
-                onMouseUp={() => {
-                  if (pr()) openUrl(pr()!.url + "/checks")
-                  else if (state().visible[0]) openUrl(state().visible[0].link)
-                }}
-              >
-                ↗
-              </text>
-            </box>
-          </Show>
-        </Show>
-        <box height={1} flexDirection="row" width="100%" justifyContent="space-between">
-          <text fg={theme().text} overflow="hidden" flexShrink={1} wrapMode="none" onMouseUp={toggleExpanded}>
-            {state().hasChecks ? (expanded() ? "▼" : "▶") : " "}{" "}
-            {state().summary.length ? "GitHub " : null}
-            {state().parts.map((part, index) => (
-              <span>
-                {index > 0 ? <span style={{ fg: theme().textMuted }}> · </span> : null}
-                {part.count}{" "}<span style={{ fg: part.color }}>{part.icon}</span>
-              </span>
-            ))}
-            {!state().summary.length ? " " : null}
-          </text>
-          {pr() ? (
+      {pr() ? (
+        <box flexDirection="column" backgroundColor={theme().backgroundPanel}>
+          <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
+            <text fg={theme().text} overflow="hidden" flexShrink={1} wrapMode="none">
+              GitHub
+              {state().parts.length ? <span style={{ fg: theme().textMuted }}> · </span> : null}
+              {state().parts.map((part, index) => (
+                <span>
+                  {index > 0 ? <span style={{ fg: theme().textMuted }}> · </span> : null}
+                  {part.count}{" "}<span style={{ fg: part.color }}>{part.icon}</span>
+                </span>
+              ))}
+            </text>
             <text fg={theme().textMuted} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(pr()!.url)}>
               <span style={{ fg: theme().primary }}>#{pr()!.num}</span>
               {" ↗"}
             </text>
-          ) : null}
+          </box>
+          <For each={panelRows()}>
+            {(row) => row.kind === "check" ? (
+              <CheckRow item={row.item} theme={theme()} spin={spin()} />
+            ) : (
+              <text fg={theme().textMuted} wrapMode="none">+{state().rest} more</text>
+            )}
+          </For>
         </box>
-      </box>
+      ) : null}
 
-      <text> </text>
+      {pr() ? (
+        <text fg={autoReact() ? theme().text : theme().textMuted} onMouseUp={toggleAutoReact}>
+          <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "[x]" : "[ ]"}</span>{" "}
+          Auto-react to CI failures
+        </text>
+      ) : null}
 
-      <text>
-        <span style={{ fg: theme().textMuted }}>{location().parent}/</span>
-        <span style={{ fg: theme().textMuted }}>{location().name}</span>
-      </text>
-      {location().branch ? <text fg={theme().text}>{location().branch}</text> : null}
+      {showPlaceholders() ? (
+        <box flexDirection="column">
+          <PlaceholderRow theme={theme()} left="---" />
+          <PlaceholderRow theme={theme()} left="---" />
+        </box>
+      ) : (
+        <box flexDirection="column">
+          <text fg={theme().textMuted} overflow="hidden" wrapMode="none">{location().path}</text>
+          {location().branch ? <text fg={theme().text} wrapMode="none">{location().branch}</text> : null}
+        </box>
+      )}
       <text fg={theme().textMuted}>
         <span style={{ fg: theme().success }}>•</span> <b>Open</b>
         <span style={{ fg: theme().text }}><b>Code</b></span>{" "}
