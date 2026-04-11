@@ -255,7 +255,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const limit = checks.length > MAX_ROWS ? MAX_ROWS - 1 : MAX_ROWS
     const visible = checks.slice(0, limit)
     const rest = Math.max(0, checks.length - limit)
-    const parts: { count: number; icon: string; color: any }[] = []
+    const parts: { count: number; icon: string; color: TuiPluginApi["theme"]["current"]["text"] }[] = []
     if (failN) parts.push({ count: failN, icon: "✗", color: theme().error })
     if (pendN) parts.push({ count: pendN, icon: SPINNER[spin()], color: theme().warning })
     if (passN) parts.push({ count: passN, icon: "✓", color: theme().success })
@@ -312,7 +312,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     ciTimer = setTimeout(() => void poll(sid, dir, token), 1_000)
   }
 
-  const reactToFailure = async (sid: string, dir: string, nextPr: PrData, nextBranch: string | undefined, next: CiData) => {
+  const reactToFailure = async (sid: string, dir: string, nextPr: PrData, nextBranch: string | undefined, next: NonNullable<CiData>) => {
     props.api.ui.toast({
       variant: "error",
       title: "GitHub CI failed",

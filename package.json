@@ -1,0 +1,21 @@
+{
+  "name": "opencode-gh-plugin",
+  "private": true,
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@opencode-ai/plugin": "^1.4.3",
+    "@opentui/solid": "^0.1.97",
+    "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.1",
+    "@typescript-eslint/parser": "^8.58.1",
+    "eslint": "^10.2.0",
+    "globals": "^17.4.0",
+    "solid-js": "1.9.11",
+    "typescript": "^6.0.2"
+  }
+}
