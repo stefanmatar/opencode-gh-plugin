@@ -335,9 +335,26 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
 
   const applyCi = (sid: string, dir: string, next: CiData, nextPr: PrData = pr(), nextBranch: string | undefined = repo()?.branch) => {
     if (next) {
-      const prev = seenReactionState ? lastReactionState : null
+      // Stabilise the elapsed counter: keep the first-seen startedAt for
+      // pending checks so upstream timestamp jitter doesn't make the
+      // seconds counter jump backward. Once a check finishes we accept
+      // the final upstream timestamps.
+      const prev = ci()
+      if (prev) {
+        const old = new Map(prev.checks.map((c) => [c.name + "\0" + c.workflow, c]))
+        for (const c of next.checks) {
+          if (!isPending(c.state)) continue
+          const o = old.get(c.name + "\0" + c.workflow)
+          if (!o) continue
+          const oStart = new Date(o.startedAt).getTime()
+          const nStart = new Date(c.startedAt).getTime()
+          if (oStart >= BOGUS || nStart < BOGUS) continue
+          if (oStart <= nStart) c.startedAt = o.startedAt
+        }
+      }
+      const prevReaction = seenReactionState ? lastReactionState : null
       const current = ciReactionOverall(next.checks)
-      const shouldReact = seenReactionState && prev !== "fail" && current === "fail"
+      const shouldReact = seenReactionState && prevReaction !== "fail" && current === "fail"
       seenReactionState = true
       lastReactionState = current
       setCi(next)
