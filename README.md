@@ -12,19 +12,6 @@ An [OpenCode](https://opencode.ai) TUI plugin that adds GitHub context to the se
 
 ![demo](./demo.gif)
 
-The screenshot/demo may lag the latest footer layout. The current UI looks more like:
-
-```text
-▼ GitHub ✓ 29 ✓ · 21 ○                      #2149 ↗
-Lint / actionlint                         38s ✓ ↗
-API CI / build                            49s ✓ ↗
-API CI / b...ild-image                  1m31s ✓ ↗
-+43 more                                    ↗
-
-~/repo:branch-name
-• OpenCode 1.4.3
-```
-
 ## Install
 
 Point your OpenCode TUI plugin config at `sidebar-context.tsx`:
