@@ -461,7 +461,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       {pr() ? (
         <text fg={autoReact() ? theme().text : theme().textMuted} onMouseUp={toggleAutoReact}>
           <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "[x]" : "[ ]"}</span>{" "}
-          Auto-react to CI failures
+           Watch CI
         </text>
       ) : null}
 
