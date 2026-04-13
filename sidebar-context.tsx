@@ -257,10 +257,10 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const visible = checks.slice(0, limit)
     const rest = Math.max(0, checks.length - limit)
     const parts: { count: number; icon: string; color: TuiPluginApi["theme"]["current"]["text"] }[] = []
+    if (skipN) parts.push({ count: skipN, icon: SKIP_ICON, color: theme().text })
     if (failN) parts.push({ count: failN, icon: "✗", color: theme().error })
     if (pendN) parts.push({ count: pendN, icon: SPINNER[spin()], color: theme().warning })
     if (passN) parts.push({ count: passN, icon: "✓", color: theme().success })
-    if (skipN) parts.push({ count: skipN, icon: SKIP_ICON, color: theme().textMuted })
     let maxDur = 0
     for (const item of visible) {
       const dur = isPending(item.state) ? elapsed(item.startedAt) : isSkip(item.state) ? "" : spanDuration([item])
@@ -284,11 +284,10 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const headerStats = createMemo(() => {
     const parts = state().parts
     const t = theme()
-    const hover = panelHover()
     return (
       <span>
         {parts.map((part, index) => (
-          <span>{index > 0 ? " " : null}<span style={{ fg: hover ? t.text : t.textMuted }}>{part.count}</span>{" "}<span style={{ fg: hover ? t.text : part.color }}>{part.icon}</span></span>
+          <span>{index > 0 ? " " : null}{part.count}{" "}<span style={{ fg: part.color }}>{part.icon}</span></span>
         ))}
       </span>
     )
@@ -450,8 +449,8 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       {pr() ? (
         <box flexDirection="column" backgroundColor={theme().backgroundPanel} onMouseOver={() => setPanelHover(true)} onMouseOut={() => setPanelHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
           <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
-            <text fg={panelHover() ? theme().text : theme().textMuted} flexShrink={0} wrapMode="none">#{pr()!.num} ↗</text>
-            <text fg={panelHover() ? theme().text : theme().textMuted} flexShrink={0} wrapMode="none">{headerStats()}</text>
+            <text fg={theme().text} flexShrink={0} wrapMode="none">#{pr()!.num} ↗</text>
+            <text fg={theme().text} flexShrink={0} wrapMode="none">{headerStats()}</text>
           </box>
           <For each={panelRows()}>
             {(item) => <CheckRow item={item} theme={theme()} spin={spin()} labelMax={state().labelMax} />}
@@ -461,8 +460,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       {pr() ? (
         <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
           <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
-            <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
-            Watch CI
+            Autofix {autoReact() ? <span style={{ fg: theme().success }}>·</span> : " "}
           </text>
         </box>
       ) : null}
