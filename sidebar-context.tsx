@@ -9,7 +9,7 @@ import type {
 import { execFile } from "node:child_process"
 const BOGUS = 1_000_000_000_000
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-const SKIP_ICON = "○"
+const SKIP_ICON = "⊘"
 const MAX_ROWS = 4
 // ── Types ──
 
@@ -128,8 +128,9 @@ const parseCi = (out: string | null): CiData => {
 
 const middle = (txt: string, max = 22) => {
   if (txt.length <= max) return txt
-  const left = Math.ceil((max - 3) / 2)
-  const right = Math.floor((max - 3) / 2)
+  const keep = max - 3
+  const left = Math.min(Math.ceil(keep / 3), keep)
+  const right = keep - left
   return txt.slice(0, left) + "..." + txt.slice(-right)
 }
 
@@ -165,13 +166,13 @@ const ms = (item: CiCheck & { queued: boolean }) => {
   return e - s
 }
 
-const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"]; spin: number }) => {
+const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"]; spin: number; labelMax: number }) => {
   const icon = isFail(props.item.state) ? "✗" : isPending(props.item.state) ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
   const color = isFail(props.item.state) ? props.theme.error : isPending(props.item.state) ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
   const dur = isPending(props.item.state) ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
   return (
     <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.backgroundPanel}>
-      <text fg={props.theme.text} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item))}</text>
+      <text fg={props.theme.textMuted} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item), props.labelMax)}</text>
       <text fg={props.theme.textMuted} flexShrink={0} wrapMode="none">
         {dur ? `${dur} ` : ""}
         <span style={{ fg: color }}>{icon}</span>
@@ -205,7 +206,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const [pr, setPr] = createSignal<PrData>(null)
   const [ci, setCi] = createSignal<CiData>(null)
   const [spin, setSpin] = createSignal(0)
-  const [autoReact, setAutoReact] = createSignal(false)
+  const [autoReact, setAutoReact] = createSignal(true)
   const [loading, setLoading] = createSignal(true)
 
   const theme = createMemo(() => props.api.theme.current)
@@ -259,9 +260,17 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     if (pendN) parts.push({ count: pendN, icon: SPINNER[spin()], color: theme().warning })
     if (passN) parts.push({ count: passN, icon: "✓", color: theme().success })
     if (skipN) parts.push({ count: skipN, icon: SKIP_ICON, color: theme().textMuted })
+    let maxDur = 0
+    for (const item of visible) {
+      const dur = isPending(item.state) ? elapsed(item.startedAt) : isSkip(item.state) ? "" : spanDuration([item])
+      if (dur.length > maxDur) maxDur = dur.length
+    }
+    // right side: "{dur} {icon}" → dur + 1 space + 1 icon; plus 1 space gap from label
+    const labelMax = maxDur > 0 ? 38 - maxDur - 3 : 38
     return {
       failN,
       hasChecks,
+      labelMax,
       passN,
       pendN,
       parts,
@@ -274,6 +283,20 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const rows: Array<{ kind: "check"; item: CiCheck } | { kind: "more" }> = state().visible.map((item) => ({ kind: "check", item }))
     if (state().rest > 0) rows.push({ kind: "more" })
     return rows
+  })
+  const headerRight = createMemo(() => {
+    const p = pr()
+    if (!p) return null
+    const parts = state().parts
+    const t = theme()
+    return (
+      <span>
+        {parts.map((part, index) => (
+          <span>{index > 0 ? <span style={{ fg: t.textMuted }}> · </span> : null}{part.count}{" "}<span style={{ fg: part.color }}>{part.icon}</span></span>
+        ))}
+        {parts.length ? <span style={{ fg: t.textMuted }}> · </span> : ""}#{p.num} ↗
+      </span>
+    )
   })
 
   let spinTimer: ReturnType<typeof setInterval> | null = null
@@ -405,7 +428,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     setCi(null)
     seenReactionState = false
     lastReactionState = null
-    setAutoReact(props.api.kv.get(autoReactKey(sid), false))
+    setAutoReact(props.api.kv.get(autoReactKey(sid), true))
     void load(sid, true)
 
     const offIdle = props.api.event.on("session.idle", (evt) => {
@@ -432,36 +455,31 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       {pr() ? (
         <box flexDirection="column" backgroundColor={theme().backgroundPanel}>
           <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
-            <text fg={theme().text} overflow="hidden" flexShrink={1} wrapMode="none">
-              GitHub
-              {state().parts.length ? <span style={{ fg: theme().textMuted }}> · </span> : null}
-              {state().parts.map((part, index) => (
-                <span>
-                  {index > 0 ? <span style={{ fg: theme().textMuted }}> · </span> : null}
-                  {part.count}{" "}<span style={{ fg: part.color }}>{part.icon}</span>
-                </span>
-              ))}
-            </text>
-            <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(pr()!.url)}>
-              <span style={{ fg: theme().primary }}>#{pr()!.num}</span>
-              {" ↗"}
-            </text>
+            <text fg={theme().text} overflow="hidden" flexShrink={1} wrapMode="none">GitHub</text>
+            <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(pr()!.url)}>{headerRight()}</text>
           </box>
           <For each={panelRows()}>
             {(row) => row.kind === "check" ? (
-              <CheckRow item={row.item} theme={theme()} spin={spin()} />
+              <CheckRow item={row.item} theme={theme()} spin={spin()} labelMax={state().labelMax} />
             ) : (
-              <text fg={theme().textMuted} wrapMode="none">+{state().rest} more</text>
+              <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
+                <text fg={theme().textMuted} wrapMode="none">+{state().rest} more</text>
+                <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
+                  <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
+                  Watch CI
+                </text>
+              </box>
             )}
           </For>
+          {state().rest === 0 ? (
+            <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
+              <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
+                <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
+                Watch CI
+              </text>
+            </box>
+          ) : null}
         </box>
-      ) : null}
-
-      {pr() ? (
-        <text fg={autoReact() ? theme().text : theme().textMuted} onMouseUp={toggleAutoReact}>
-          <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
-           Watch CI
-        </text>
       ) : null}
 
       {showPlaceholders() ? (
