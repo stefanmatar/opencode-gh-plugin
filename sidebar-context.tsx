@@ -208,6 +208,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const [spin, setSpin] = createSignal(0)
   const [autoReact, setAutoReact] = createSignal(true)
   const [loading, setLoading] = createSignal(true)
+  const [panelHover, setPanelHover] = createSignal(false)
 
   const theme = createMemo(() => props.api.theme.current)
   const toggleAutoReact = () => {
@@ -279,22 +280,16 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       visible,
     }
   })
-  const panelRows = createMemo(() => {
-    const rows: Array<{ kind: "check"; item: CiCheck } | { kind: "more" }> = state().visible.map((item) => ({ kind: "check", item }))
-    if (state().rest > 0) rows.push({ kind: "more" })
-    return rows
-  })
-  const headerRight = createMemo(() => {
-    const p = pr()
-    if (!p) return null
+  const panelRows = createMemo(() => state().visible)
+  const headerStats = createMemo(() => {
     const parts = state().parts
     const t = theme()
+    const hover = panelHover()
     return (
       <span>
         {parts.map((part, index) => (
-          <span>{index > 0 ? <span style={{ fg: t.textMuted }}> · </span> : null}{part.count}{" "}<span style={{ fg: part.color }}>{part.icon}</span></span>
+          <span>{index > 0 ? " " : null}<span style={{ fg: hover ? t.text : t.textMuted }}>{part.count}</span>{" "}<span style={{ fg: hover ? t.text : part.color }}>{part.icon}</span></span>
         ))}
-        {parts.length ? <span style={{ fg: t.textMuted }}> · </span> : ""}#{p.num} ↗
       </span>
     )
   })
@@ -451,39 +446,29 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   }, { defer: false }))
 
   return (
-    <box gap={1}>
+    <box>
       {pr() ? (
-        <box flexDirection="column" backgroundColor={theme().backgroundPanel}>
+        <box flexDirection="column" backgroundColor={theme().backgroundPanel} onMouseOver={() => setPanelHover(true)} onMouseOut={() => setPanelHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
           <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
-            <text fg={theme().text} overflow="hidden" flexShrink={1} wrapMode="none">GitHub</text>
-            <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(pr()!.url)}>{headerRight()}</text>
+            <text fg={panelHover() ? theme().text : theme().textMuted} flexShrink={0} wrapMode="none">#{pr()!.num} ↗</text>
+            <text fg={panelHover() ? theme().text : theme().textMuted} flexShrink={0} wrapMode="none">{headerStats()}</text>
           </box>
           <For each={panelRows()}>
-            {(row) => row.kind === "check" ? (
-              <CheckRow item={row.item} theme={theme()} spin={spin()} labelMax={state().labelMax} />
-            ) : (
-              <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
-                <text fg={theme().textMuted} wrapMode="none">+{state().rest} more</text>
-                <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
-                  <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
-                  Watch CI
-                </text>
-              </box>
-            )}
+            {(item) => <CheckRow item={item} theme={theme()} spin={spin()} labelMax={state().labelMax} />}
           </For>
-          {state().rest === 0 ? (
-            <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
-              <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
-                <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
-                Watch CI
-              </text>
-            </box>
-          ) : null}
+        </box>
+      ) : null}
+      {pr() ? (
+        <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
+          <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
+            <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
+            Watch CI
+          </text>
         </box>
       ) : null}
 
       {showPlaceholders() ? (
-        <box flexDirection="column">
+        <box flexDirection="column" marginTop={1}>
           <PlaceholderRow theme={theme()} left="---" />
           <PlaceholderRow theme={theme()} left="---" />
         </box>
@@ -493,11 +478,13 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
           {location().branch ? <text fg={theme().text} wrapMode="none">{location().branch}</text> : null}
         </box>
       )}
-      <text fg={theme().textMuted}>
-        <span style={{ fg: theme().success }}>•</span> <b>Open</b>
-        <span style={{ fg: theme().text }}><b>Code</b></span>{" "}
-        <span>{props.api.app.version}</span>
-      </text>
+      <box marginTop={1}>
+        <text fg={theme().textMuted}>
+          <span style={{ fg: theme().success }}>•</span> <b>Open</b>
+          <span style={{ fg: theme().text }}><b>Code</b></span>{" "}
+          <span>{props.api.app.version}</span>
+        </text>
+      </box>
     </box>
   )
 }
