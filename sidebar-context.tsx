@@ -11,6 +11,7 @@ const BOGUS = 1_000_000_000_000
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 const SKIP_ICON = "⊘"
 const MAX_ROWS = 4
+const SUCCESS_MUTED = "#7aa684"
 // ── Types ──
 
 type PrData = { url: string; num: string } | null
@@ -261,7 +262,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const visible = checks.slice(0, limit)
     const rest = Math.max(0, checks.length - limit)
     const parts: { count: number; icon: string; color: TuiPluginApi["theme"]["current"]["text"] }[] = []
-    if (skipN) parts.push({ count: skipN, icon: SKIP_ICON, color: theme().text })
+    if (skipN) parts.push({ count: skipN, icon: SKIP_ICON, color: theme().textMuted })
     if (failN) parts.push({ count: failN, icon: "✗", color: theme().error })
     if (pendN) parts.push({ count: pendN, icon: SPINNER[spin()], color: theme().warning })
     if (passN) parts.push({ count: passN, icon: "✓", color: theme().success })
@@ -287,27 +288,45 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const panelRows = createMemo(() => {
     const rows: Array<
       | { kind: "check"; item: CiCheck }
-      | { kind: "footer"; count: number }
+      | { kind: "footer" }
     > = state().visible.map((item) => ({ kind: "check" as const, item }))
-    rows.push({ kind: "footer", count: state().rest })
+    rows.push({ kind: "footer" })
     return rows
   })
-  const headerStats = createMemo(() => {
-    const parts = state().parts
-    const t = theme()
-    const hover = summaryHover()
+  const footerStats = createMemo(() => {
+    const items: Array<{ label: string; icon: string; color: string; labelColor?: string }> = []
+    if (state().skipN) items.push({ label: String(state().skipN), icon: SKIP_ICON, color: theme().textMuted })
+    if (state().failN) {
+      items.push({
+        label: String(state().failN),
+        icon: "✗",
+        color: theme().error,
+        labelColor: theme().text,
+      })
+    }
+    if (state().pendN) items.push({ label: String(state().pendN), icon: SPINNER[spin()], color: theme().warning })
+    if (state().passN) items.push({ label: String(state().passN), icon: "✓", color: theme().success })
     return (
       <span>
-        {parts.map((part, index) => (
+        {items.map((item, index) => (
           <span>
-            {index > 0 ? " " : null}
-            <span style={{ fg: hover ? t.text : t.textMuted }}>{part.count}</span>
+            {index > 0 ? <span style={{ fg: theme().textMuted }}> · </span> : null}
+            <span style={{ fg: item.labelColor ?? theme().text }}>{item.label}</span>
             {" "}
-            <span style={{ fg: hover ? part.color : t.textMuted }}>{part.icon}</span>
+            <span style={{ fg: item.color }}>{item.icon}</span>
           </span>
         ))}
       </span>
     )
+  })
+  const prLinkStatus = createMemo(() => {
+    const t = theme()
+    if (summaryHover()) return { icon: "↗", color: t.text }
+    const overall = ciOverall(ci()?.checks)
+    if (overall === "fail") return { icon: "✗", color: t.error }
+    if (overall === "pending") return { icon: SPINNER[spin()], color: t.warning }
+    if (overall === "pass") return { icon: "✓", color: SUCCESS_MUTED }
+    return { icon: "↗", color: t.textMuted }
   })
 
   let spinTimer: ReturnType<typeof setInterval> | null = null
@@ -468,13 +487,12 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
           <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
             <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseOver={() => setCollapseHover(true)} onMouseOut={() => setCollapseHover(false)} onMouseUp={toggleCollapse}>
               <span style={{ fg: collapseHover() ? theme().text : theme().textMuted }}>{collapsed() ? "▶" : "▼"}</span>
-              {" "}CI {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
+              {" "}GitHub {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
             </text>
             <box flexDirection="row" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
-              <text fg={summaryHover() ? theme().text : theme().textMuted} wrapMode="none">{headerStats()}</text>
               <text fg={summaryHover() ? theme().text : theme().textMuted} wrapMode="none">
-                {" · #"}{pr()!.num}{" "}
-                <span style={{ fg: summaryHover() ? theme().text : theme().textMuted }}>↗</span>
+                #{pr()!.num}{" "}
+                <span style={{ fg: prLinkStatus().color }}>{prLinkStatus().icon}</span>
               </text>
             </box>
           </box>
@@ -484,9 +502,9 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
                 <CheckRow item={row.item} theme={theme()} spin={spin()} labelMax={state().labelMax} />
               ) : (
                 <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)}>
-                  <text fg={theme().textMuted} wrapMode="none">{row.count > 0 ? `+${row.count}` : ""}</text>
+                  <text fg={theme().textMuted} wrapMode="none">{footerStats()}</text>
                   <text fg={autoReact() || autofixHover() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
-                    Autofix {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : autofixHover() ? <span style={{ fg: theme().text }}>·</span> : " "}
+                    Autofix {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
                   </text>
                 </box>
               )}
