@@ -10,7 +10,7 @@ import { execFile } from "node:child_process"
 const BOGUS = 1_000_000_000_000
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 const SKIP_ICON = "○"
-const MAX_ROWS = 7
+const MAX_ROWS = 4
 // ── Types ──
 
 type PrData = { url: string; num: string } | null
@@ -172,10 +172,9 @@ const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"
   return (
     <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.backgroundPanel}>
       <text fg={props.theme.text} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item))}</text>
-      <text fg={props.theme.textMuted} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(props.item.link)}>
+      <text fg={props.theme.textMuted} flexShrink={0} wrapMode="none">
         {dur ? `${dur} ` : ""}
         <span style={{ fg: color }}>{icon}</span>
-        {" ↗"}
       </text>
     </box>
   )
@@ -443,7 +442,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
                 </span>
               ))}
             </text>
-            <text fg={theme().textMuted} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(pr()!.url)}>
+            <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseUp={() => openUrl(pr()!.url)}>
               <span style={{ fg: theme().primary }}>#{pr()!.num}</span>
               {" ↗"}
             </text>
@@ -460,7 +459,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
 
       {pr() ? (
         <text fg={autoReact() ? theme().text : theme().textMuted} onMouseUp={toggleAutoReact}>
-          <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "[x]" : "[ ]"}</span>{" "}
+          <span style={{ fg: autoReact() ? theme().success : theme().textMuted }}>{autoReact() ? "●" : "○"}</span>{" "}
            Watch CI
         </text>
       ) : null}
