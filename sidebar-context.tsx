@@ -402,11 +402,12 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
 
   const schedule = (sid: string, dir: string) => {
     stopCi()
-    const st = ciOverall(ci()?.checks)
-    if (st === "pending") startSpin()
+    const checks = ci()?.checks
+    const hasPending = checks?.some((c) => isPending(c.state))
+    if (hasPending) startSpin()
     else stopSpin()
     const now = Date.now()
-    const delay = st === "pending"
+    const delay = hasPending
       ? PENDING_POLL_MS
       : now < burst
         ? BURST_POLL_MS
