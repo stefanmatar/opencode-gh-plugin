@@ -12,9 +12,13 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 const SKIP_ICON = "⊘"
 const MAX_ROWS = 4
 const SUCCESS_MUTED = "#7aa684"
+const PENDING_POLL_MS = 15_000
+const BURST_POLL_MS = 5_000
+const BURST_WINDOW_MS = 15_000
+const IDLE_REFRESH_MS = 60_000
 // ── Types ──
 
-type PrData = { url: string; num: string } | null
+type PrData = { url: string; num: string; title: string } | null
 type CiOverallState = "fail" | "pending" | "pass" | null
 type CiCheck = { name: string; state: string; bucket?: string; workflow: string; link: string; startedAt: string; completedAt: string }
 type CiData = { checks: CiCheck[]; ts: number } | null
@@ -113,9 +117,36 @@ const sessionDir = async (api: TuiPluginApi, sid: string) => {
 
 const parsePr = (out: string | null): PrData => {
   if (!out) return null
-  const idx = out.lastIndexOf(" ")
-  if (idx <= 0 || idx >= out.length - 1) return null
-  return { url: out.slice(0, idx), num: out.slice(idx + 1) }
+  const lines = out.split("\n")
+  if (lines.length < 3) return null
+  const [title, url, num] = lines
+  return title && url && num ? { title, url, num } : null
+}
+
+const prViewArgs = ["--json", "title,url,number", "-q", '.title + "\\n" + .url + "\\n" + (.number|tostring)']
+
+const resolvePr = async (dir: string, head?: string) => {
+  if (head) {
+    const explicit = parsePr(await gh(["pr", "view", head, ...prViewArgs], dir))
+    if (explicit) return explicit
+
+    return parsePr(await gh([
+      "pr",
+      "list",
+      "--head",
+      head,
+      "--state",
+      "open",
+      "--limit",
+      "1",
+      "--json",
+      "title,url,number",
+      "-q",
+      '.[0] | if . then .title + "\\n" + .url + "\\n" + (.number|tostring) else empty end',
+    ], dir))
+  }
+
+  return parsePr(await gh(["pr", "view", ...prViewArgs], dir))
 }
 
 const parseCi = (out: string | null): CiData => {
@@ -125,6 +156,13 @@ const parseCi = (out: string | null): CiData => {
   } catch {
     return null
   }
+}
+
+const ciArgs = ["--json", "name,state,bucket,workflow,link,startedAt,completedAt"]
+
+const resolveCi = async (dir: string, head?: string) => {
+  if (head) return parseCi(await gh(["pr", "checks", head, ...ciArgs], dir))
+  return parseCi(await gh(["pr", "checks", ...ciArgs], dir))
 }
 
 const middle = (txt: string, max = 22) => {
@@ -285,6 +323,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       visible,
     }
   })
+  const showGithub = createMemo(() => Boolean(pr()) || state().hasChecks)
   const panelRows = createMemo(() => {
     const rows: Array<
       | { kind: "check"; item: CiCheck }
@@ -294,8 +333,13 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     return rows
   })
   const footerStats = createMemo(() => {
-    const items: Array<{ label: string; icon: string; color: string; labelColor?: string }> = []
-    if (state().skipN) items.push({ label: String(state().skipN), icon: SKIP_ICON, color: theme().textMuted })
+    const items: Array<{
+      label: string
+      icon: string
+      color: TuiPluginApi["theme"]["current"]["text"]
+      labelColor?: TuiPluginApi["theme"]["current"]["text"]
+    }> = []
+    if (state().skipN) items.push({ label: String(state().skipN), icon: SKIP_ICON, color: theme().text })
     if (state().failN) {
       items.push({
         label: String(state().failN),
@@ -333,6 +377,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   let ciTimer: ReturnType<typeof setTimeout> | null = null
   let burst = 0
   let token = 0
+  let lastIdleLoad = 0
   let seenReactionState = false
   let lastReactionState: CiOverallState = null
 
@@ -360,8 +405,14 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const st = ciOverall(ci()?.checks)
     if (st === "pending") startSpin()
     else stopSpin()
-    if (st !== "pending" && Date.now() >= burst) return
-    ciTimer = setTimeout(() => void poll(sid, dir, token), 1_000)
+    const now = Date.now()
+    const delay = st === "pending"
+      ? PENDING_POLL_MS
+      : now < burst
+        ? BURST_POLL_MS
+        : 0
+    if (!delay) return
+    ciTimer = setTimeout(() => void poll(sid, dir, token), delay)
   }
 
   const reactToFailure = async (sid: string, dir: string, nextPr: PrData, nextBranch: string | undefined, next: NonNullable<CiData>) => {
@@ -417,7 +468,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   }
 
   const poll = async (sid: string, dir: string, run: number) => {
-    const next = parseCi(await gh(["pr", "checks", "--json", "name,state,bucket,workflow,link,startedAt,completedAt"], dir))
+    const next = await resolveCi(dir, repo()?.branch)
     if (run !== token) return
     if (next || Date.now() < burst) applyCi(sid, dir, next)
     schedule(sid, dir)
@@ -425,7 +476,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
 
   const load = async (sid: string, noisy: boolean) => {
     const run = ++token
-    if (noisy) burst = Date.now() + 30_000
+    if (noisy) burst = Date.now() + BURST_WINDOW_MS
     stopCi()
     const dir = await sessionDir(props.api, sid)
     if (run !== token) return
@@ -437,16 +488,17 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       stopSpin()
       return
     }
-    const [head, pull, checks] = await Promise.all([
-      branch(dir),
-      gh(["pr", "view", "--json", "url,number", "-q", ".url + \" \" + (.number|tostring)"], dir),
-      gh(["pr", "checks", "--json", "name,state,bucket,workflow,link,startedAt,completedAt"], dir),
+    const head = await branch(dir)
+    if (run !== token) return
+    const [checks, nextPr] = await Promise.all([
+      resolveCi(dir, head),
+      resolvePr(dir, head),
     ])
     if (run !== token) return
-    const nextPr = parsePr(pull)
     setRepo({ dir, branch: head })
     setPr(nextPr)
-    applyCi(sid, dir, parseCi(checks), nextPr, head)
+    props.api.kv.set(`shared:pr:${sid}`, nextPr)
+    applyCi(sid, dir, checks, nextPr, head)
     setLoading(false)
     schedule(sid, dir)
   }
@@ -463,6 +515,8 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
 
     const offIdle = props.api.event.on("session.idle", (evt) => {
       if ((evt as { properties?: { sessionID?: string } }).properties?.sessionID !== sid) return
+      if (Date.now() - lastIdleLoad < IDLE_REFRESH_MS) return
+      lastIdleLoad = Date.now()
       void load(sid, true)
     })
 
@@ -482,30 +536,37 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
 
   return (
     <box>
-      {pr() ? (
+      {showGithub() ? (
         <box flexDirection="column" backgroundColor={theme().backgroundPanel}>
           <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
-            <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseOver={() => setCollapseHover(true)} onMouseOut={() => setCollapseHover(false)} onMouseUp={toggleCollapse}>
-              <span style={{ fg: collapseHover() ? theme().text : theme().textMuted }}>{collapsed() ? "▶" : "▼"}</span>
-              {" "}GitHub {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
-            </text>
-            <box flexDirection="row" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
-              <text fg={summaryHover() ? theme().text : theme().textMuted} wrapMode="none">
+            <box flexDirection="row" flexShrink={1}>
+              <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseOver={() => setCollapseHover(true)} onMouseOut={() => setCollapseHover(false)} onMouseUp={toggleCollapse}>
+                <span style={{ fg: collapseHover() ? theme().text : theme().textMuted }}>{collapsed() ? "▶" : "▼"}</span>
+                {" "}GitHub{" "}
+              </text>
+              <text fg={autofixHover() || autoReact() ? theme().text : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)} onMouseUp={toggleAutoReact}>
+                {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
+                {" "}Watch
+              </text>
+            </box>
+            {pr() ? (
+              <text fg={summaryHover() ? theme().text : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
                 #{pr()!.num}{" "}
                 <span style={{ fg: prLinkStatus().color }}>{prLinkStatus().icon}</span>
               </text>
-            </box>
+            ) : (
+              <text fg={theme().textMuted} wrapMode="none" flexShrink={0}>
+                <span style={{ fg: prLinkStatus().color }}>{prLinkStatus().icon}</span>
+              </text>
+            )}
           </box>
           {!collapsed() ? (
             <For each={panelRows()}>
               {(row) => row.kind === "check" ? (
                 <CheckRow item={row.item} theme={theme()} spin={spin()} labelMax={state().labelMax} />
               ) : (
-                <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)}>
+                <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
                   <text fg={theme().textMuted} wrapMode="none">{footerStats()}</text>
-                  <text fg={autoReact() || autofixHover() ? theme().text : theme().textMuted} wrapMode="none" onMouseUp={toggleAutoReact}>
-                    Autofix {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
-                  </text>
                 </box>
               )}
             </For>
