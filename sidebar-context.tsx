@@ -545,7 +545,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
                 <span style={{ fg: collapseHover() ? theme().text : theme().textMuted }}>{collapsed() ? "▶" : "▼"}</span>
                 {" "}GitHub{" "}
               </text>
-              <text fg={autofixHover() || autoReact() ? theme().text : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)} onMouseUp={toggleAutoReact}>
+              <text fg={autoReact() ? theme().text : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)} onMouseUp={toggleAutoReact}>
                 {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
                 {" "}Watch
               </text>
