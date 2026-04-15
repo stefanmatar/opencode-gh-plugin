@@ -39,9 +39,9 @@ const isReactionPending = (item: CiCheck) => item.bucket ? item.bucket === "pend
 
 const PATH = (process.env.PATH || "") + ":/opt/homebrew/bin"
 
-const cmd = (bin: string, args: string[], dir: string): Promise<string | null> =>
+const cmd = (bin: string, args: string[], dir: string, timeout = 10_000): Promise<string | null> =>
   new Promise((resolve) => {
-    execFile(bin, args, { cwd: dir, timeout: 10000, env: { ...process.env, PATH } }, (err, stdout) => {
+    execFile(bin, args, { cwd: dir, timeout, env: { ...process.env, PATH } }, (err, stdout) => {
       resolve(err ? null : (stdout?.toString().trim() || null))
     })
   })
@@ -178,7 +178,32 @@ const checkLabel = (item: CiCheck) => {
   return wf && wf !== item.name ? `${wf} / ${item.name}` : item.name
 }
 
-const failurePrompt = (pr: PrData, branch: string | undefined, checks: CiCheck[]) => {
+const extractRunIds = (checks: CiCheck[]): string[] => {
+  const ids = new Set<string>()
+  for (const c of checks) {
+    if (!c.link) continue
+    const m = c.link.match(/\/actions\/runs\/(\d+)/)
+    if (m) ids.add(m[1])
+  }
+  return [...ids]
+}
+
+const fetchFailedLogs = async (dir: string, runIds: string[], maxChars = 12_000): Promise<string | null> => {
+  const chunks: string[] = []
+  let total = 0
+  for (const id of runIds.slice(0, 3)) {
+    const out = await cmd("gh", ["run", "view", id, "--log-failed"], dir, 30_000)
+    if (!out) continue
+    const remaining = maxChars - total
+    if (remaining <= 0) break
+    const trimmed = out.length > remaining ? out.slice(-remaining) : out
+    chunks.push(trimmed)
+    total += trimmed.length
+  }
+  return chunks.length > 0 ? chunks.join("\n\n") : null
+}
+
+const failurePrompt = (pr: PrData, branch: string | undefined, checks: CiCheck[], logs: string | null) => {
   const lines = [
     `GitHub CI just failed${pr ? ` for PR #${pr.num}` : ""}${branch ? ` on branch ${branch}` : ""}.`,
   ]
@@ -192,6 +217,14 @@ const failurePrompt = (pr: PrData, branch: string | undefined, checks: CiCheck[]
     }
   }
   if (pr?.url) lines.push(`PR: ${pr.url}`)
+  if (logs) {
+    lines.push("")
+    lines.push("Failed check logs:")
+    lines.push("```")
+    lines.push(logs)
+    lines.push("```")
+  }
+  lines.push("")
   lines.push("Investigate the failing checks and take the next appropriate action.")
   return lines.join("\n")
 }
@@ -423,10 +456,13 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       message: autoReact() ? "Notifying the agent." : "CI checks entered a failing state.",
     })
     if (!autoReact()) return
+    const failingChecks = next.checks.filter(isReactionFail)
+    const runIds = extractRunIds(failingChecks)
+    const logs = runIds.length > 0 ? await fetchFailedLogs(dir, runIds) : null
     const res = await props.api.client.session.promptAsync({
       sessionID: sid,
       directory: dir,
-      parts: [{ type: "text", text: failurePrompt(nextPr, nextBranch, next.checks) }],
+      parts: [{ type: "text", text: failurePrompt(nextPr, nextBranch, next.checks, logs) }],
     }, { throwOnError: true }).catch(() => null)
     if (!res) {
       props.api.ui.toast({
