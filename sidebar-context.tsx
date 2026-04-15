@@ -290,6 +290,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const toggleAutoReact = () => {
     const next = !autoReact()
     setAutoReact(next)
+    if (!next) setAutofixHover(false)
     props.api.kv.set(autoReactKey(props.session_id), next)
   }
   const location = createMemo(() => {
