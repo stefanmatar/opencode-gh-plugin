@@ -8,7 +8,7 @@ import type {
 } from "@opencode-ai/plugin/tui"
 import { execFile } from "node:child_process"
 const BOGUS = 1_000_000_000_000
-const SPINNER = ["▱▱▱", "▰▱▱", "▰▰▱", "▰▰▰", "▱▰▰", "▱▱▰"]
+const SPINNER = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
 const SKIP_ICON = "⊘"
 const MAX_ROWS = 4
 const SUCCESS_MUTED = "#7aa684"
@@ -425,7 +425,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     if (spinTimer) return
     spinTimer = setInterval(() => {
       setSpin((i) => (i + 1) % SPINNER.length)
-    }, 200)
+    }, 100)
   }
 
   const stopCi = () => {
