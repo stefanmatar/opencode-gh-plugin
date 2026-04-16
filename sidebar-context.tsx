@@ -14,8 +14,9 @@ const MAX_ROWS = 4
 const SUCCESS_MUTED = "#7aa684"
 const PENDING_POLL_MS = 15_000
 const BURST_POLL_MS = 5_000
-const BURST_WINDOW_MS = 15_000
-const IDLE_REFRESH_MS = 60_000
+const BURST_WINDOW_MS = 30_000
+const HEAD_POLL_MS = 15_000
+const IDLE_REFRESH_MS = 15_000
 // ── Types ──
 
 type PrData = { url: string; num: string; title: string } | null
@@ -239,15 +240,16 @@ const ms = (item: CiCheck & { queued: boolean }) => {
 }
 
 const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"]; spin: number; labelMax: number }) => {
-  const icon = isFail(props.item.state) ? "✗" : isPending(props.item.state) ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
-  const color = isFail(props.item.state) ? props.theme.error : isPending(props.item.state) ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
-  const dur = isPending(props.item.state) ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
+  const pending = isPending(props.item.state)
+  const icon = () => isFail(props.item.state) ? "✗" : pending ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
+  const color = isFail(props.item.state) ? props.theme.error : pending ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
+  const dur = pending ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
   return (
     <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.backgroundPanel}>
       <text fg={props.theme.textMuted} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item), props.labelMax)}</text>
       <text fg={props.theme.textMuted} flexShrink={0} wrapMode="none">
         {dur ? `${dur} ` : ""}
-        <span style={{ fg: color }}>{icon}</span>
+        <span style={{ fg: color }}>{icon()}</span>
       </text>
     </box>
   )
@@ -389,7 +391,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
         {items.map((item, index) => (
           <span>
             {index > 0 ? <span style={{ fg: theme().textMuted }}> · </span> : null}
-            <span style={{ fg: item.labelColor ?? theme().text }}>{item.label}</span>
+            <span style={{ fg: item.labelColor ?? theme().textMuted }}>{item.label}</span>
             {" "}
             <span style={{ fg: item.color }}>{item.icon}</span>
           </span>
@@ -397,21 +399,32 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       </span>
     )
   })
-  const prLinkStatus = createMemo(() => {
-    const t = theme()
-    if (summaryHover()) return { icon: "↗", color: t.text }
+  const prLinkIcon = () => {
+    if (summaryHover()) return "↗"
     const overall = ciOverall(ci()?.checks)
-    if (overall === "fail") return { icon: "✗", color: t.error }
-    if (overall === "pending") return { icon: SPINNER[spin()], color: t.warning }
-    if (overall === "pass") return { icon: "✓", color: SUCCESS_MUTED }
-    return { icon: "↗", color: t.textMuted }
-  })
+    if (overall === "fail") return "✗"
+    if (overall === "pending") return SPINNER[spin()]
+    if (overall === "pass") return "✓"
+    return "↗"
+  }
+  const prLinkColor = () => {
+    const t = theme()
+    if (summaryHover()) return t.text
+    const overall = ciOverall(ci()?.checks)
+    if (overall === "fail") return t.error
+    if (overall === "pending") return t.warning
+    if (overall === "pass") return SUCCESS_MUTED
+    return t.textMuted
+  }
 
   let spinTimer: ReturnType<typeof setInterval> | null = null
   let ciTimer: ReturnType<typeof setTimeout> | null = null
+  let headTimer: ReturnType<typeof setInterval> | null = null
   let burst = 0
   let token = 0
   let lastIdleLoad = 0
+  let lastHead: string | null = null
+  let loadInFlight = false
   let seenReactionState = false
   let lastReactionState: CiOverallState = null
 
@@ -515,30 +528,39 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const load = async (sid: string, noisy: boolean) => {
     const run = ++token
     if (noisy) burst = Date.now() + BURST_WINDOW_MS
+    loadInFlight = true
     stopCi()
-    const dir = await sessionDir(props.api, sid)
-    if (run !== token) return
-    if (!dir) {
-      setRepo(null)
-      setPr(null)
-      setCi(null)
+    try {
+      const dir = await sessionDir(props.api, sid)
+      if (run !== token) return
+      if (!dir) {
+        setRepo(null)
+        setPr(null)
+        setCi(null)
+        setLoading(false)
+        stopSpin()
+        return
+      }
+      const head = await branch(dir)
+      if (run !== token) return
+      // Seed HEAD sha for the poll so it has a baseline
+      const sha = await git(["rev-parse", "HEAD"], dir)
+      if (run !== token) return
+      if (sha) lastHead = sha
+      const [checks, nextPr] = await Promise.all([
+        resolveCi(dir, head),
+        resolvePr(dir, head),
+      ])
+      if (run !== token) return
+      setRepo({ dir, branch: head })
+      setPr(nextPr)
+      props.api.kv.set(`shared:pr:${sid}`, nextPr)
+      applyCi(sid, dir, checks, nextPr, head)
       setLoading(false)
-      stopSpin()
-      return
+      schedule(sid, dir)
+    } finally {
+      loadInFlight = false
     }
-    const head = await branch(dir)
-    if (run !== token) return
-    const [checks, nextPr] = await Promise.all([
-      resolveCi(dir, head),
-      resolvePr(dir, head),
-    ])
-    if (run !== token) return
-    setRepo({ dir, branch: head })
-    setPr(nextPr)
-    props.api.kv.set(`shared:pr:${sid}`, nextPr)
-    applyCi(sid, dir, checks, nextPr, head)
-    setLoading(false)
-    schedule(sid, dir)
   }
 
   createEffect(on(() => props.session_id, (sid) => {
@@ -563,9 +585,25 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       void load(sid, true)
     })
 
+    const stopHead = () => {
+      if (!headTimer) return
+      clearInterval(headTimer)
+      headTimer = null
+    }
+    stopHead()
+    headTimer = setInterval(async () => {
+      const dir = repo()?.dir
+      if (!dir || loadInFlight) return
+      const sha = await git(["rev-parse", "HEAD"], dir)
+      if (!sha || sha === lastHead) return
+      lastHead = sha
+      void load(sid, true)
+    }, HEAD_POLL_MS)
+
     onCleanup(() => {
       offIdle()
       offBranch()
+      stopHead()
       token++
       stopCi()
       stopSpin()
@@ -590,11 +628,11 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
             {pr() ? (
               <text fg={summaryHover() ? theme().text : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
                 #{pr()!.num}{" "}
-                <span style={{ fg: prLinkStatus().color }}>{prLinkStatus().icon}</span>
+                <span style={{ fg: prLinkColor() }}>{prLinkIcon()}</span>
               </text>
             ) : (
               <text fg={theme().textMuted} wrapMode="none" flexShrink={0}>
-                <span style={{ fg: prLinkStatus().color }}>{prLinkStatus().icon}</span>
+                <span style={{ fg: prLinkColor() }}>{prLinkIcon()}</span>
               </text>
             )}
           </box>
