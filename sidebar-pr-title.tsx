@@ -35,7 +35,7 @@ const SidebarTitle = (props: {
   return (
     <box flexDirection="column" width="100%">
       {pr() ? (
-        <box flexDirection="column" width="100%" marginBottom={1}>
+        <box flexDirection="column" width="100%">
           <box
             flexDirection="row"
             width="100%"
