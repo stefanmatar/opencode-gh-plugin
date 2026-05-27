@@ -631,10 +631,8 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
             </box>
             {pr() ? (
               <box flexDirection="row" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
-                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text : theme().textMuted}>
-                  {`#${pr()!.num}`}
-                  <span style={{ fg: prLinkColor() }}>{` ${prLinkIcon()}`}</span>
-                </text>
+                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text : theme().textMuted}>{`#${pr()!.num}`}</text>
+                <text wrapMode="none" flexShrink={0} fg={prLinkColor()}>{` ${prLinkIcon()}`}</text>
               </box>
             ) : (
               <text fg={prLinkColor()} wrapMode="none" flexShrink={0}>{prLinkIcon()}</text>
