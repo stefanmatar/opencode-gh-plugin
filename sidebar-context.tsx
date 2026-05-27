@@ -12,6 +12,7 @@ const SPINNER = ["⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇", "⠋"]
 const SKIP_ICON = "⊘"
 const MAX_ROWS = 4
 const SUCCESS_MUTED = "#7aa684"
+const MERGED_PURPLE = "#a78bfa"
 const PENDING_POLL_MS = 15_000
 const BURST_POLL_MS = 5_000
 const BURST_WINDOW_MS = 30_000
@@ -19,7 +20,7 @@ const HEAD_POLL_MS = 15_000
 const IDLE_REFRESH_MS = 15_000
 // ── Types ──
 
-type PrData = { url: string; num: string; title: string } | null
+type PrData = { url: string; num: string; title: string; merged: boolean } | null
 type CiOverallState = "fail" | "pending" | "pass" | null
 type CiCheck = { name: string; state: string; bucket?: string; workflow: string; link: string; startedAt: string; completedAt: string }
 type CiData = { checks: CiCheck[]; ts: number } | null
@@ -119,12 +120,14 @@ const sessionDir = async (api: TuiPluginApi, sid: string) => {
 const parsePr = (out: string | null): PrData => {
   if (!out) return null
   const lines = out.split("\n")
-  if (lines.length < 3) return null
-  const [title, url, num] = lines
-  return title && url && num ? { title, url, num } : null
+  if (lines.length < 4) return null
+  const [title, url, num, mergedAt] = lines
+  return title && url && num ? { title, url, num, merged: Boolean(mergedAt) } : null
 }
 
-const prViewArgs = ["--json", "title,url,number", "-q", '.title + "\\n" + .url + "\\n" + (.number|tostring)']
+const prFields = "title,url,number,mergedAt"
+const prQuery = '.title + "\\n" + .url + "\\n" + (.number|tostring) + "\\n" + (.mergedAt // "")'
+const prViewArgs = ["--json", prFields, "-q", prQuery]
 
 const resolvePr = async (dir: string, head?: string) => {
   if (head) {
@@ -137,13 +140,13 @@ const resolvePr = async (dir: string, head?: string) => {
       "--head",
       head,
       "--state",
-      "open",
+      "all",
       "--limit",
       "1",
       "--json",
-      "title,url,number",
+      prFields,
       "-q",
-      '.[0] | if . then .title + "\\n" + .url + "\\n" + (.number|tostring) else empty end',
+      `.[0] | if . then ${prQuery} else empty end`,
     ], dir))
   }
 
@@ -240,16 +243,20 @@ const ms = (item: CiCheck & { queued: boolean }) => {
 }
 
 const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"]; spin: number; labelMax: number }) => {
-  const pending = isPending(props.item.state)
-  const icon = () => isFail(props.item.state) ? "✗" : pending ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
-  const color = isFail(props.item.state) ? props.theme.error : pending ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
-  const dur = pending ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
+  const pending = () => isPending(props.item.state)
+  const icon = () => isFail(props.item.state) ? "✗" : pending() ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
+  const color = () => isFail(props.item.state) ? props.theme.error : pending() ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
+  const durColor = () => pending() ? props.theme.warning : props.theme.textMuted
+  const dur = () => pending() ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
+  // OpenTUI quirk: the first character of a <span> inside <text> inherits the
+  // outer fg. We prepend a leading space inside each colour-critical span so
+  // the "bad first char" is invisible whitespace.
   return (
     <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.backgroundPanel}>
       <text fg={props.theme.textMuted} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item), props.labelMax)}</text>
-      <text fg={props.theme.textMuted} flexShrink={0} wrapMode="none">
-        {dur ? `${dur} ` : ""}
-        <span style={{ fg: color }}>{icon()}</span>
+      <text flexShrink={0} wrapMode="none">
+        <span style={{ fg: durColor() }}>{dur() ? ` ${dur()}` : ""}</span>
+        <span style={{ fg: color() }}>{` ${icon()}`}</span>
       </text>
     </box>
   )
@@ -368,7 +375,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     rows.push({ kind: "footer" })
     return rows
   })
-  const footerStats = createMemo(() => {
+  const footerItems = createMemo(() => {
     const items: Array<{
       label: string
       icon: string
@@ -386,21 +393,11 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     }
     if (state().pendN) items.push({ label: String(state().pendN), icon: SPINNER[spin()], color: theme().warning })
     if (state().passN) items.push({ label: String(state().passN), icon: "✓", color: theme().success })
-    return (
-      <span>
-        {items.map((item, index) => (
-          <span>
-            {index > 0 ? <span style={{ fg: theme().textMuted }}> · </span> : null}
-            <span style={{ fg: item.labelColor ?? theme().textMuted }}>{item.label}</span>
-            {" "}
-            <span style={{ fg: item.color }}>{item.icon}</span>
-          </span>
-        ))}
-      </span>
-    )
+    return items
   })
   const prLinkIcon = () => {
     if (summaryHover()) return "↗"
+    if (pr()?.merged) return "◆"
     const overall = ciOverall(ci()?.checks)
     if (overall === "fail") return "✗"
     if (overall === "pending") return SPINNER[spin()]
@@ -410,6 +407,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const prLinkColor = () => {
     const t = theme()
     if (summaryHover()) return t.text
+    if (pr()?.merged) return MERGED_PURPLE
     const overall = ciOverall(ci()?.checks)
     if (overall === "fail") return t.error
     if (overall === "pending") return t.warning
@@ -616,24 +614,30 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
         <box flexDirection="column" backgroundColor={theme().backgroundPanel}>
           <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
             <box flexDirection="row" flexShrink={1}>
-              <text fg={theme().text} flexShrink={0} wrapMode="none" onMouseOver={() => setCollapseHover(true)} onMouseOut={() => setCollapseHover(false)} onMouseUp={toggleCollapse}>
-                <span style={{ fg: collapseHover() ? theme().text : theme().textMuted }}>{collapsed() ? "▶" : "▼"}</span>
-                {" "}GitHub{" "}
-              </text>
-              <text fg={autoReact() ? theme().text : autofixHover() ? (theme().textFaded ?? theme().textMuted) : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)} onMouseUp={toggleAutoReact}>
-                {autoReact() ? <span style={{ fg: theme().success }}><b>•</b></span> : <span style={{ fg: theme().textMuted }}>·</span>}
-                {" "}Watch
-              </text>
+              <box flexDirection="row" flexShrink={0} onMouseOver={() => setCollapseHover(true)} onMouseOut={() => setCollapseHover(false)} onMouseUp={toggleCollapse}>
+                {/* OpenTUI quirk: first char of a <span> in <text> inherits outer fg.
+                    Set outer fg to the colour we want for the first character (▼/▶). */}
+                <text flexShrink={0} wrapMode="none" fg={collapseHover() ? theme().text : theme().textMuted}>
+                  {collapsed() ? "▶" : "▼"}
+                  <span style={{ fg: theme().text }}>{" GitHub "}</span>
+                </text>
+              </box>
+              <box flexDirection="row" flexShrink={0} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)} onMouseUp={toggleAutoReact}>
+                <text flexShrink={0} wrapMode="none" fg={autoReact() ? theme().success : theme().textMuted}>
+                  {autoReact() ? "•" : "·"}
+                  <span style={{ fg: autoReact() ? theme().text : autofixHover() ? theme().text : theme().textMuted }}>{" Watch"}</span>
+                </text>
+              </box>
             </box>
             {pr() ? (
-              <text fg={summaryHover() ? theme().text : theme().textMuted} wrapMode="none" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
-                #{pr()!.num}{" "}
-                <span style={{ fg: prLinkColor() }}>{prLinkIcon()}</span>
-              </text>
+              <box flexDirection="row" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
+                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text : theme().textMuted}>
+                  {`#${pr()!.num}`}
+                  <span style={{ fg: prLinkColor() }}>{` ${prLinkIcon()}`}</span>
+                </text>
+              </box>
             ) : (
-              <text fg={theme().textMuted} wrapMode="none" flexShrink={0}>
-                <span style={{ fg: prLinkColor() }}>{prLinkIcon()}</span>
-              </text>
+              <text fg={prLinkColor()} wrapMode="none" flexShrink={0}>{prLinkIcon()}</text>
             )}
           </box>
           {!collapsed() ? (
@@ -642,7 +646,18 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
                 <CheckRow item={row.item} theme={theme()} spin={spin()} labelMax={state().labelMax} />
               ) : (
                 <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
-                  <text fg={theme().textMuted} wrapMode="none">{footerStats()}</text>
+                  <For each={footerItems()}>
+                    {(item, index) => (
+                      // First char of each <span> inherits outer fg. Set outer fg
+                      // to the label colour (first visible chars) and prepend a
+                      // space inside the icon span so the icon glyph survives.
+                      <text wrapMode="none" flexShrink={0} fg={item.labelColor ?? theme().textMuted}>
+                        {index() > 0 ? <span style={{ fg: theme().textMuted }}>{" · "}</span> : null}
+                        {item.label}
+                        <span style={{ fg: item.color }}>{` ${item.icon}`}</span>
+                      </text>
+                    )}
+                  </For>
                 </box>
               )}
             </For>
@@ -662,10 +677,11 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
         </box>
       )}
       <box marginTop={1}>
-        <text fg={theme().textMuted}>
-          <span style={{ fg: theme().success }}>•</span> <b>Open</b>
-          <span style={{ fg: theme().text }}><b>Code</b></span>{" "}
-          <span>{props.api.app.version}</span>
+        <text fg={theme().success}>
+          {"•"}
+          <span style={{ fg: theme().textMuted }}>{" "}<b>Open</b></span>
+          <span style={{ fg: theme().text }}><b>Code</b></span>
+          <span style={{ fg: theme().textMuted }}>{" " + props.api.app.version}</span>
         </text>
       </box>
     </box>
