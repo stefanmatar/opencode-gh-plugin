@@ -120,7 +120,7 @@ const sessionDir = async (api: TuiPluginApi, sid: string) => {
 const parsePr = (out: string | null): PrData => {
   if (!out) return null
   const lines = out.split("\n")
-  if (lines.length < 4) return null
+  if (lines.length < 3) return null
   const [title, url, num, mergedAt] = lines
   return title && url && num ? { title, url, num, merged: Boolean(mergedAt) } : null
 }
