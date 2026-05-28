@@ -517,9 +517,15 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   }
 
   const poll = async (sid: string, dir: string, run: number) => {
-    const next = await resolveCi(dir, repo()?.branch)
+    const currentBranch = repo()?.branch
+    const [next, nextPr] = await Promise.all([
+      resolveCi(dir, currentBranch),
+      resolvePr(dir, currentBranch),
+    ])
     if (run !== token) return
-    if (next || Date.now() < burst) applyCi(sid, dir, next)
+    setPr(nextPr)
+    props.api.kv.set(`shared:pr:${sid}`, nextPr)
+    if (next || Date.now() < burst) applyCi(sid, dir, next, nextPr, currentBranch)
     schedule(sid, dir)
   }
 
@@ -631,7 +637,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
             </box>
             {pr() ? (
               <box flexDirection="row" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
-                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text : theme().textMuted}>{`#${pr()!.num}`}</text>
+                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text : pr()?.merged ? MERGED_PURPLE : theme().textMuted}>{`#${pr()!.num}`}</text>
                 <text wrapMode="none" flexShrink={0} fg={prLinkColor()}>{` ${prLinkIcon()}`}</text>
               </box>
             ) : (
