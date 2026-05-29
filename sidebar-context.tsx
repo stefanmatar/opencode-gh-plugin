@@ -8,7 +8,7 @@ import type {
 } from "@opencode-ai/plugin/tui"
 import { execFile } from "node:child_process"
 const BOGUS = 1_000_000_000_000
-const SPINNER = ["⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇", "⠋"]
+const SPINNER = ["·", "•"]
 const SKIP_ICON = "⊘"
 const MAX_ROWS = 4
 const SUCCESS_MUTED = "#7aa684"
@@ -342,11 +342,6 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const limit = checks.length > MAX_ROWS ? MAX_ROWS - 1 : MAX_ROWS
     const visible = checks.slice(0, limit)
     const rest = Math.max(0, checks.length - limit)
-    const parts: { count: number; icon: string; color: TuiPluginApi["theme"]["current"]["text"] }[] = []
-    if (skipN) parts.push({ count: skipN, icon: SKIP_ICON, color: theme().textMuted })
-    if (failN) parts.push({ count: failN, icon: "✗", color: theme().error })
-    if (pendN) parts.push({ count: pendN, icon: SPINNER[spin()], color: theme().warning })
-    if (passN) parts.push({ count: passN, icon: "✓", color: theme().success })
     let maxDur = 0
     for (const item of visible) {
       const dur = isPending(item.state) ? elapsed(item.startedAt) : isSkip(item.state) ? "" : spanDuration([item])
@@ -360,7 +355,6 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       labelMax,
       passN,
       pendN,
-      parts,
       rest,
       skipN,
       visible,
@@ -435,7 +429,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const startSpin = () => {
     if (spinTimer) return
     spinTimer = setInterval(() => {
-      setSpin((i) => (i + 1) % SPINNER.length)
+      setSpin(Math.floor(Date.now() / 100) % SPINNER.length)
     }, 100)
   }
 
